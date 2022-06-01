@@ -2,9 +2,8 @@
 
 ### Registration and authorization (JWT)
 
-POST
-  /signup [body: username, password, email]  
-  /signin [body: username, password]  
+POST /signup [body: username, password, email]  
+POST /signin [body: username, password]  
 
 ### Records Service
 
