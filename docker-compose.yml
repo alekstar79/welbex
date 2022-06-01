@@ -1,0 +1,134 @@
+version: "3"
+services:
+  rabbitmq:
+    image: rabbitmq:3.10-alpine
+    command: rabbitmq-server
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "localhost", "5672" ]
+      interval: 5s
+      timeout: 15s
+      retries: 5
+    networks:
+      - net_amqp_broker
+  records_pg:
+    image: postgres:12.6-alpine
+    restart: unless-stopped
+    environment:
+      - PGDATA=/var/lib/postgresql/data/records_data
+      - POSTGRES_USER=$PG_RECORDS_USER
+      - POSTGRES_PASSWORD=$PG_RECORDS_PASSWORD
+      - POSTGRES_DB=$PG_RECORDS_DB
+    volumes:
+      - db_records:/var/lib/postgresql/data/records_data
+    healthcheck:
+      test: pg_isready -q -d $PG_RECORDS_DB -U $PG_RECORDS_USER
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - net_records_db
+  users_pg:
+    image: postgres:12.6-alpine
+    restart: unless-stopped
+    environment:
+      - PGDATA=/var/lib/postgresql/data/users_data
+      - POSTGRES_USER=$PG_USERS_USER
+      - POSTGRES_PASSWORD=$PG_USERS_PASSWORD
+      - POSTGRES_DB=$PG_USERS_DB
+    volumes:
+      - db_users:/var/lib/postgresql/data/users_data
+    healthcheck:
+      test: pg_isready -q -d $PG_USERS_DB -U $PG_USERS_USER
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - net_users_db
+  mailing:
+    container_name: mailing_srv
+    restart: always
+    env_file: ./.env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    build:
+      context: ./mailing
+    environment:
+      - RMQ_USER=${RABBITMQ_DEFAULT_USER:-guest}
+      - RMQ_PASS=${RABBITMQ_DEFAULT_PASS:-guest}
+      - RMQ_HOST=${RABBITMQ_DEFAULT_HOST:-rabbitmq}
+      - RMQ_PORT=${RABBITMQ_DEFAULT_PORT:-5672}
+    networks:
+      - net_amqp_broker
+  records:
+    container_name: records_srv
+    restart: always
+    env_file: ./.env
+    depends_on:
+      records_pg:
+        condition: service_healthy
+    build:
+      context: ./records
+    ports:
+      - $RECORDS_HOST_PORT:$RECORDS_DOCKER_PORT
+    environment:
+      - PG_HOST=records_pg
+      - PG_PORT=$PG_RECORDS_DOCKER_PORT
+      - PG_USER=$PG_RECORDS_USER
+      - PG_PASSWORD=$PG_RECORDS_PASSWORD
+      - PG_DB=$PG_RECORDS_DB
+    networks:
+      - net_records_db
+      - net_records
+  users:
+    container_name: users_srv
+    restart: always
+    env_file: ./.env
+    depends_on:
+      users_pg:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    build:
+      context: ./users
+    ports:
+      - $USERS_HOST_PORT:$USERS_DOCKER_PORT
+    environment:
+      - RMQ_USER=${RABBITMQ_DEFAULT_USER:-guest}
+      - RMQ_PASS=${RABBITMQ_DEFAULT_PASS:-guest}
+      - RMQ_HOST=${RABBITMQ_DEFAULT_HOST:-rabbitmq}
+      - RMQ_PORT=${RABBITMQ_DEFAULT_PORT:-5672}
+      - PG_HOST=users_pg
+      - PG_PORT=$PG_USERS_DOCKER_PORT
+      - PG_USER=$PG_USERS_USER
+      - PG_PASSWORD=$PG_USERS_PASSWORD
+      - PG_DB=$PG_USERS_DB
+    networks:
+      - net_amqp_broker
+      - net_users_db
+      - net_users
+  nginx_proxy:
+    container_name: reverse-proxy
+    build:
+      context: ./proxy
+    depends_on:
+      - records
+      - users
+    ports:
+      - 8080:80
+    networks:
+      - net_records
+      - net_users
+volumes:
+  db_records:
+  db_users:
+networks:
+  net_records_db:
+    driver: bridge
+  net_users_db:
+    driver: bridge
+  net_amqp_broker:
+    driver: bridge
+  net_records:
+  net_users:
